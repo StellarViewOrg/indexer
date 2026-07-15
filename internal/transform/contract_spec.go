@@ -213,6 +213,18 @@ func ProcessContractSpec(ctx context.Context, rpc *source.RPCClient, db *store.P
 	isSep41 := classifyAsSep41(specEntries)
 	isSep50 := classifyAsSep50(specEntries)
 
+	// Fetch SEP-41 token metadata via simulateTransaction (no-arg calls).
+	// Returns nil for any field that cannot be fetched; COALESCE in UpsertContract
+	// preserves existing DB values if nil is passed.
+	var tokenName, tokenSymbol *string
+	var tokenDecimals *int32
+	if isSep41 {
+		tokenName, tokenSymbol, tokenDecimals, err = FetchSep41Metadata(ctx, rpc, contract.ContractID)
+		if err != nil {
+			log.Printf("contract_spec: fetch metadata for %s: %v", contract.ContractID, err)
+		}
+	}
+
 	wasmHashHex := hex.EncodeToString(wasmHash[:])
 
 	// Upsert contract code
@@ -240,14 +252,18 @@ func ProcessContractSpec(ctx context.Context, rpc *source.RPCClient, db *store.P
 		ContractType:       contractTypWasm,
 		IsSep41Token:       isSep41,
 		IsSep50NFT:         isSep50,
+		TokenName:          tokenName,
+		TokenSymbol:        tokenSymbol,
+		TokenDecimals:      tokenDecimals,
 		ContractSpec:       specParsedJSON,
 	}
 	if err := db.UpsertContract(ctx, storeContract); err != nil {
 		log.Printf("contract_spec: upsert contract %s: %v", contract.ContractID, err)
 	}
 
-	log.Printf("contract_spec: processed %s (sep41=%v sep50=%v wasm=%d bytes)",
-		contract.ContractID, isSep41, isSep50, len(wasmBytes))
+	log.Printf("contract_spec: processed %s (sep41=%v sep50=%v wasm=%d bytes name=%v symbol=%v decimals=%v)",
+		contract.ContractID, isSep41, isSep50, len(wasmBytes),
+		tokenName, tokenSymbol, tokenDecimals)
 }
 
 // --- Ledger key builders ---
