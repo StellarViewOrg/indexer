@@ -19,10 +19,15 @@ import (
 )
 
 const (
-	wasmMagic                     = "\x00asm"
-	contractSpecSectionName       = "contractspecv0"
-	contractTypWasm         int16 = 0
+	wasmMagic                      = "\x00asm"
+	contractSpecSectionName        = "contractspecv0"
+	contractTypeWasm         int16 = 0
+	contractTypeStellarAsset int16 = 1
 )
+
+// errNotWasmContract is returned by extractWasmHashFromInstance when the
+// contract is a Stellar Asset Contract (SAC) rather than a WASM contract.
+var errNotWasmContract = fmt.Errorf("contract is not a WASM contract")
 
 // sep41FunctionNames are the required functions for a SEP-41 token contract.
 var sep41FunctionNames = []string{"balance", "transfer", "name", "symbol", "decimals"}
@@ -40,7 +45,6 @@ type DetectedContract struct {
 
 // collectTxApplyChanges extracts ledger entry changes from a TransactionMeta.
 func collectTxApplyChanges(ledgerSeq uint32, meta xdr.TransactionMeta, out *[]xdr.LedgerEntryChange) {
-	log.Printf("detect_contracts: ledger %d tx_meta_version=%d", ledgerSeq, meta.V)
 	switch meta.V {
 	case 3:
 		if meta.V3 != nil {
@@ -156,6 +160,26 @@ func ProcessContractSpec(ctx context.Context, rpc *source.RPCClient, db *store.P
 	}
 
 	wasmHash, err := extractWasmHashFromInstance(instanceResult.Entries[0].XDR)
+	if err == errNotWasmContract {
+		// Stellar Asset Contract (SAC) — no WASM, but still a valid contract.
+		// SACs always implement the SEP-41 token interface natively.
+		storeContract := &store.Contract{
+			ContractID:         contract.ContractID,
+			WasmHash:           nil,
+			CreatorAccount:     nilIfEmpty(contract.CreatorAccount),
+			CreatedLedger:      contract.CreatedLedger,
+			CreatedAt:          contract.CreatedAt,
+			LastModifiedLedger: contract.CreatedLedger,
+			ContractType:       contractTypeStellarAsset,
+			IsSep41Token:       true,
+		}
+		if err := db.UpsertContract(ctx, storeContract); err != nil {
+			log.Printf("contract_spec: upsert SAC %s: %v", contract.ContractID, err)
+		} else {
+			log.Printf("contract_spec: stored SAC %s", contract.ContractID)
+		}
+		return
+	}
 	if err != nil {
 		log.Printf("contract_spec: extract wasm hash for %s: %v", contract.ContractID, err)
 		return
@@ -249,7 +273,7 @@ func ProcessContractSpec(ctx context.Context, rpc *source.RPCClient, db *store.P
 		CreatedLedger:      contract.CreatedLedger,
 		CreatedAt:          contract.CreatedAt,
 		LastModifiedLedger: contract.CreatedLedger,
-		ContractType:       contractTypWasm,
+		ContractType:       contractTypeWasm,
 		IsSep41Token:       isSep41,
 		IsSep50NFT:         isSep50,
 		TokenName:          tokenName,
@@ -332,7 +356,7 @@ func extractWasmHashFromInstance(entryXDR string) (xdr.Hash, error) {
 		return xdr.Hash{}, fmt.Errorf("contract data value is not an instance")
 	}
 	if instance.Executable.Type != xdr.ContractExecutableTypeContractExecutableWasm {
-		return xdr.Hash{}, fmt.Errorf("contract is not a WASM contract")
+		return xdr.Hash{}, errNotWasmContract
 	}
 	return instance.Executable.MustWasmHash(), nil
 }
