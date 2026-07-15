@@ -18,7 +18,7 @@ func getRPCClient(t *testing.T) *source.RPCClient {
 	if endpoint == "" {
 		endpoint = "https://soroban-testnet.stellar.org"
 	}
-	return source.NewRPCClient(endpoint)
+	return source.NewRPCClient(endpoint, network.TestNetworkPassphrase)
 }
 
 func TestLedgerFromRPC(t *testing.T) {

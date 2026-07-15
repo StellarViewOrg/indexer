@@ -13,17 +13,26 @@ import (
 
 // RPCClient communicates with a Stellar RPC node via JSON-RPC 2.0.
 type RPCClient struct {
-	endpoint   string
-	httpClient *http.Client
+	endpoint          string
+	networkPassphrase string
+	httpClient        *http.Client
 }
 
-func NewRPCClient(endpoint string) *RPCClient {
+func NewRPCClient(endpoint, networkPassphrase string) *RPCClient {
 	return &RPCClient{
-		endpoint: endpoint,
+		endpoint:          endpoint,
+		networkPassphrase: networkPassphrase,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
 	}
+}
+
+// NetworkPassphrase returns the Stellar network passphrase this client is
+// connected to. Used by the transform layer when building transaction envelopes
+// for simulateTransaction calls.
+func (c *RPCClient) NetworkPassphrase() string {
+	return c.networkPassphrase
 }
 
 // --- JSON-RPC request / response envelope ---
@@ -180,6 +189,34 @@ func (c *RPCClient) GetLedgerEntries(ctx context.Context, keys []string) (*GetLe
 	var result GetLedgerEntriesResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, fmt.Errorf("unmarshal getLedgerEntries: %w", err)
+	}
+	return &result, nil
+}
+
+// --- simulateTransaction ---
+
+type SimulateTransactionParams struct {
+	Transaction string `json:"transaction"`
+}
+
+type SimulateTransactionResultEntry struct {
+	XDR string `json:"xdr"` // base64-encoded ScVal
+}
+
+type SimulateTransactionResult struct {
+	Results      []SimulateTransactionResultEntry `json:"results,omitempty"`
+	LatestLedger uint32                           `json:"latestLedger"`
+	Error        string                           `json:"error,omitempty"`
+}
+
+func (c *RPCClient) SimulateTransaction(ctx context.Context, txEnvelopeXDR string) (*SimulateTransactionResult, error) {
+	raw, err := c.call(ctx, "simulateTransaction", SimulateTransactionParams{Transaction: txEnvelopeXDR})
+	if err != nil {
+		return nil, err
+	}
+	var result SimulateTransactionResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("unmarshal simulateTransaction: %w", err)
 	}
 	return &result, nil
 }

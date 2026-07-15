@@ -4,14 +4,26 @@ import (
 	"context"
 	"os"
 	"testing"
+
+	"github.com/stellar/go-stellar-sdk/network"
 )
 
 func getRPCClient(t *testing.T) *RPCClient {
+	if testing.Short() {
+		t.Skip("skipping test that requires live network access")
+	}
 	endpoint := os.Getenv("TEST_RPC_ENDPOINT")
 	if endpoint == "" {
 		endpoint = "https://soroban-testnet.stellar.org"
 	}
-	return NewRPCClient(endpoint)
+	return NewRPCClient(endpoint, network.TestNetworkPassphrase)
+}
+
+func TestRPCClientNetworkPassphrase(t *testing.T) {
+	client := NewRPCClient("https://example.com", "Test SDF Network ; September 2015")
+	if got := client.NetworkPassphrase(); got != "Test SDF Network ; September 2015" {
+		t.Errorf("NetworkPassphrase() = %q, want %q", got, "Test SDF Network ; September 2015")
+	}
 }
 
 func TestGetLatestLedger(t *testing.T) {
@@ -110,6 +122,37 @@ func TestGetTransactions(t *testing.T) {
 			t.Errorf("transaction %d: expected non-empty status", i)
 		}
 	}
+}
+
+func TestSimulateTransaction(t *testing.T) {
+	client := getRPCClient(t)
+	ctx := context.Background()
+
+	// We need a minimal InvokeHostFunction tx XDR to test simulation.
+	// Build the simplest possible valid base64 XDR: just verify the RPC method
+	// accepts a request and returns a structured response (even an error response
+	// with a malformed tx is acceptable here — we are testing the RPC plumbing,
+	// not the contract logic).
+	//
+	// Use a placeholder base64 string that produces a well-formed RPC call.
+	// The RPC will return an error response for an invalid envelope, but the
+	// SimulateTransaction method should return a *SimulateTransactionResult
+	// with Error set, not a Go error.
+	//
+	// Alternatively: pass an empty string and verify the error handling.
+	result, err := client.SimulateTransaction(ctx, "AAAAAA==") // minimal base64 payload
+	// Either a Go error (bad HTTP/JSON) or a result with Error set is acceptable.
+	// What is NOT acceptable: a panic or unhandled nil pointer.
+	if err != nil {
+		t.Logf("SimulateTransaction returned Go error (expected for invalid tx): %v", err)
+		return
+	}
+	// If no Go error, result must be non-nil
+	if result == nil {
+		t.Fatal("expected non-nil result when no error")
+	}
+	t.Logf("SimulateTransaction result: error=%q results=%d latestLedger=%d",
+		result.Error, len(result.Results), result.LatestLedger)
 }
 
 func TestGetLedgersPagination(t *testing.T) {

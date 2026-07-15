@@ -29,7 +29,7 @@ func getTestDeps(t *testing.T) (*source.RPCClient, *store.PostgresStore) {
 	if rpcEndpoint == "" {
 		rpcEndpoint = "https://soroban-testnet.stellar.org"
 	}
-	rpc := source.NewRPCClient(rpcEndpoint)
+	rpc := source.NewRPCClient(rpcEndpoint, network.TestNetworkPassphrase)
 
 	return rpc, db
 }

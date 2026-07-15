@@ -65,12 +65,12 @@ func setupContext() (context.Context, context.CancelFunc) {
 	return ctx, cancel
 }
 
-func initDeps(cfg *config.Config) (*store.PostgresStore, *source.RPCClient) {
+func initDeps(cfg *config.Config, passphrase string) (*store.PostgresStore, *source.RPCClient) {
 	db, err := store.NewPostgresStore(cfg.DatabaseURL)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
-	rpc := source.NewRPCClient(cfg.RPCEndpoint)
+	rpc := source.NewRPCClient(cfg.RPCEndpoint, passphrase)
 	return db, rpc
 }
 
@@ -78,13 +78,14 @@ func runLive(cfg *config.Config) {
 	ctx, cancel := setupContext()
 	defer cancel()
 
-	db, rpc := initDeps(cfg)
-	defer db.Close()
-
 	passphrase, err := cfg.NetworkPassphrase()
 	if err != nil {
 		log.Fatalf("Failed to resolve network passphrase: %v", err)
 	}
+
+	db, rpc := initDeps(cfg, passphrase)
+	defer db.Close()
+
 	p := pipeline.NewLivePipeline(rpc, db, passphrase, cfg.BatchSize)
 
 	// Attach Redis publisher if configured
@@ -112,13 +113,14 @@ func runBackfill(cfg *config.Config) {
 	ctx, cancel := setupContext()
 	defer cancel()
 
-	db, rpc := initDeps(cfg)
-	defer db.Close()
-
 	passphrase, err := cfg.NetworkPassphrase()
 	if err != nil {
 		log.Fatalf("Failed to resolve network passphrase: %v", err)
 	}
+
+	db, rpc := initDeps(cfg, passphrase)
+	defer db.Close()
+
 	p := pipeline.NewBackfillPipeline(rpc, db, passphrase, cfg.BatchSize, cfg.WorkerCount)
 
 	log.Printf("Starting backfill from ledger %d to %d...", startLedger, endLedger)
