@@ -39,14 +39,14 @@ func TestFetchSep41Metadata(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatal(err)
 		}
-		
+
 		var env xdr.TransactionEnvelope
 		if err := xdr.SafeUnmarshalBase64(req.Params.Transaction, &env); err != nil {
 			t.Fatal(err)
 		}
-		
+
 		funcName := string(env.V1.Tx.Operations[0].Body.InvokeHostFunctionOp.HostFunction.InvokeContract.FunctionName)
-		
+
 		var scVal xdr.ScVal
 		switch funcName {
 		case "name":
@@ -59,10 +59,10 @@ func TestFetchSep41Metadata(t *testing.T) {
 			d := xdr.Uint32(7)
 			scVal = xdr.ScVal{Type: xdr.ScValTypeScvU32, U32: &d}
 		}
-		
+
 		b, _ := scVal.MarshalBinary()
 		xdrStr := base64.StdEncoding.EncodeToString(b)
-		
+
 		resp := map[string]interface{}{
 			"jsonrpc": "2.0",
 			"id":      req.ID,
