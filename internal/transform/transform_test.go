@@ -1,7 +1,7 @@
 package transform
 
 import (
-	"context"
+	"encoding/json"
 	"os"
 	"testing"
 
@@ -10,40 +10,42 @@ import (
 	"github.com/miguelnietoa/stellar-explorer/indexer/internal/source"
 )
 
-func getRPCClient(t *testing.T) *source.RPCClient {
-	if testing.Short() {
-		t.Skip("skipping test that requires live network access")
+func loadLedgersFixture(t *testing.T) []source.LedgerEntry {
+	t.Helper()
+	data, err := os.ReadFile("testdata/ledgers.json")
+	if err != nil {
+		t.Fatalf("failed to read ledgers fixture: %v", err)
 	}
-	endpoint := os.Getenv("TEST_RPC_ENDPOINT")
-	if endpoint == "" {
-		endpoint = "https://soroban-testnet.stellar.org"
+	var ledgers []source.LedgerEntry
+	if err := json.Unmarshal(data, &ledgers); err != nil {
+		t.Fatalf("failed to unmarshal ledgers fixture: %v", err)
 	}
-	return source.NewRPCClient(endpoint, network.TestNetworkPassphrase)
+	if len(ledgers) == 0 {
+		t.Fatalf("no ledgers found in fixture")
+	}
+	return ledgers
+}
+
+func loadTransactionsFixture(t *testing.T) []source.TransactionEntry {
+	t.Helper()
+	data, err := os.ReadFile("testdata/transactions.json")
+	if err != nil {
+		t.Fatalf("failed to read transactions fixture: %v", err)
+	}
+	var txs []source.TransactionEntry
+	if err := json.Unmarshal(data, &txs); err != nil {
+		t.Fatalf("failed to unmarshal transactions fixture: %v", err)
+	}
+	if len(txs) == 0 {
+		t.Fatalf("no transactions found in fixture")
+	}
+	return txs
 }
 
 func TestLedgerFromRPC(t *testing.T) {
-	client := getRPCClient(t)
-	ctx := context.Background()
+	ledgers := loadLedgersFixture(t)
 
-	latest, err := client.GetLatestLedger(ctx)
-	if err != nil {
-		t.Fatalf("GetLatestLedger failed: %v", err)
-	}
-
-	start := latest.Sequence - 3
-	result, err := client.GetLedgers(ctx, source.GetLedgersParams{
-		StartLedger: start,
-		Pagination:  &source.Pagination{Limit: 2},
-	})
-	if err != nil {
-		t.Fatalf("GetLedgers failed: %v", err)
-	}
-
-	if len(result.Ledgers) == 0 {
-		t.Fatal("expected at least one ledger")
-	}
-
-	for i, entry := range result.Ledgers {
+	for i, entry := range ledgers {
 		ledger, err := LedgerFromRPC(entry)
 		if err != nil {
 			t.Fatalf("LedgerFromRPC[%d] failed: %v", i, err)
@@ -74,29 +76,9 @@ func TestLedgerFromRPC(t *testing.T) {
 }
 
 func TestTransactionFromRPC(t *testing.T) {
-	client := getRPCClient(t)
-	ctx := context.Background()
+	txs := loadTransactionsFixture(t)
 
-	latest, err := client.GetLatestLedger(ctx)
-	if err != nil {
-		t.Fatalf("GetLatestLedger failed: %v", err)
-	}
-
-	// Fetch a larger range to increase chances of finding transactions on testnet
-	start := latest.Sequence - 50
-	result, err := client.GetTransactions(ctx, source.GetTransactionsParams{
-		StartLedger: start,
-		Pagination:  &source.Pagination{Limit: 100},
-	})
-	if err != nil {
-		t.Fatalf("GetTransactions failed: %v", err)
-	}
-
-	if len(result.Transactions) == 0 {
-		t.Skip("no transactions found in recent ledgers on testnet")
-	}
-
-	for i, entry := range result.Transactions {
+	for i, entry := range txs {
 		tx, err := TransactionFromRPC(entry, network.TestNetworkPassphrase)
 		if err != nil {
 			t.Fatalf("TransactionFromRPC[%d] failed: %v", i, err)
@@ -117,38 +99,14 @@ func TestTransactionFromRPC(t *testing.T) {
 		if tx.CreatedAt.IsZero() {
 			t.Errorf("tx[%d]: expected non-zero created_at", i)
 		}
-
-		// Stop after checking a few
-		if i >= 4 {
-			break
-		}
 	}
 }
 
 func TestOperationsFromRPC(t *testing.T) {
-	client := getRPCClient(t)
-	ctx := context.Background()
-
-	latest, err := client.GetLatestLedger(ctx)
-	if err != nil {
-		t.Fatalf("GetLatestLedger failed: %v", err)
-	}
-
-	start := latest.Sequence - 50
-	result, err := client.GetTransactions(ctx, source.GetTransactionsParams{
-		StartLedger: start,
-		Pagination:  &source.Pagination{Limit: 100},
-	})
-	if err != nil {
-		t.Fatalf("GetTransactions failed: %v", err)
-	}
-
-	if len(result.Transactions) == 0 {
-		t.Skip("no transactions found in recent ledgers on testnet")
-	}
+	txs := loadTransactionsFixture(t)
 
 	totalOps := 0
-	for i, entry := range result.Transactions {
+	for i, entry := range txs {
 		ops, err := OperationsFromRPC(entry, network.TestNetworkPassphrase)
 		if err != nil {
 			t.Fatalf("OperationsFromRPC[%d] failed: %v", i, err)
@@ -169,22 +127,11 @@ func TestOperationsFromRPC(t *testing.T) {
 			}
 			totalOps++
 		}
-
-		if i >= 4 {
-			break
-		}
 	}
 
 	if totalOps == 0 {
 		t.Error("expected at least one operation across transactions")
 	}
 
-	t.Logf("Parsed %d operations from %d transactions", totalOps, min(len(result.Transactions), 5))
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
+	t.Logf("Parsed %d operations from %d transactions", totalOps, len(txs))
 }
