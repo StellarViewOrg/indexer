@@ -313,10 +313,106 @@ func ProcessOneLedger(ctx context.Context, rpc *source.RPCClient, db *store.Post
 	return nil
 }
 
+// maxGapFillPerTick bounds how many missing ledgers a single gap-detection
+// pass will attempt to backfill, so a large or old gap can't turn one tick
+// into an unbounded historical replay.
+const maxGapFillPerTick = 500
+
+// ledgerRange is an inclusive [start, end] sequence range.
+type ledgerRange struct {
+	start uint32
+	end   uint32
+}
+
+// contiguousRanges collapses a sorted, deduplicated list of missing ledger
+// sequences into the minimal set of contiguous [start, end] ranges, so each
+// run can be re-fetched from RPC in one batch instead of one call per ledger.
+func contiguousRanges(seqs []uint32) []ledgerRange {
+	if len(seqs) == 0 {
+		return nil
+	}
+
+	ranges := []ledgerRange{{start: seqs[0], end: seqs[0]}}
+	for _, seq := range seqs[1:] {
+		last := &ranges[len(ranges)-1]
+		if seq == last.end+1 {
+			last.end = seq
+			continue
+		}
+		ranges = append(ranges, ledgerRange{start: seq, end: seq})
+	}
+	return ranges
+}
+
+// detectAndFillGaps looks for ledger sequences between the oldest and latest
+// ingested ledger that have no row in the ledgers table (e.g. left behind by
+// a network blip, restart, or RPC outage) and re-ingests them via RPC,
+// reusing the same processing path as normal live ingestion.
 func (p *LivePipeline) detectAndFillGaps(ctx context.Context) {
-	// Simple gap detection: check if there are missing sequences
-	// between the oldest and latest ingested ledgers
 	log.Println("live pipeline: running gap detection")
-	// Gap filling would query the DB for missing sequences and re-fetch from RPC.
-	// For now this is a placeholder — full implementation comes when we have more data.
+
+	minSeq, maxSeq, err := p.store.GetLedgerSequenceBounds(ctx)
+	if err != nil {
+		log.Printf("live pipeline: gap detection: failed to get ledger bounds: %v", err)
+		return
+	}
+	if maxSeq == 0 || maxSeq <= minSeq {
+		log.Println("live pipeline: gap detection: no gaps possible (not enough ledgers ingested yet)")
+		return
+	}
+
+	missing, err := p.store.FindMissingLedgerSequences(ctx, minSeq, maxSeq, maxGapFillPerTick)
+	if err != nil {
+		log.Printf("live pipeline: gap detection: failed to query missing sequences: %v", err)
+		return
+	}
+	if len(missing) == 0 {
+		log.Println("live pipeline: gap detection: no gaps found")
+		return
+	}
+
+	log.Printf("live pipeline: gap detection: found %d missing ledger(s) between %d and %d", len(missing), minSeq, maxSeq)
+
+	for _, r := range contiguousRanges(missing) {
+		filled, err := p.fillGapRange(ctx, r)
+		if err != nil {
+			log.Printf("live pipeline: gap fill failed for range %d-%d: %v", r.start, r.end, err)
+			continue
+		}
+		log.Printf("live pipeline: gap fill: refilled %d/%d ledger(s) in range %d-%d", filled, r.end-r.start+1, r.start, r.end)
+	}
+}
+
+// fillGapRange re-fetches and re-ingests every ledger in [r.start, r.end],
+// chunking the work by the pipeline's normal batch size.
+func (p *LivePipeline) fillGapRange(ctx context.Context, r ledgerRange) (int, error) {
+	filled := 0
+	cursor := r.start
+	for cursor <= r.end {
+		select {
+		case <-ctx.Done():
+			return filled, ctx.Err()
+		default:
+		}
+
+		remaining := int(r.end - cursor + 1)
+		limit := p.batchSize
+		if remaining < limit {
+			limit = remaining
+		}
+
+		count, err := p.processLedgerBatch(ctx, cursor, limit)
+		if err != nil {
+			return filled, fmt.Errorf("processLedgerBatch at %d: %w", cursor, err)
+		}
+		if count == 0 {
+			// RPC no longer has this ledger available (e.g. beyond its
+			// retention window) — nothing more we can do for this range.
+			break
+		}
+
+		cursor += uint32(count)
+		filled += count
+	}
+	return filled, nil
 }

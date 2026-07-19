@@ -295,6 +295,49 @@ func (s *PostgresStore) SetLastIngestedLedger(ctx context.Context, seq uint32) e
 	return err
 }
 
+// GetLedgerSequenceBounds returns the lowest and highest ledger sequence
+// currently stored in the ledgers table. Returns (0, 0) when the table is
+// empty.
+func (s *PostgresStore) GetLedgerSequenceBounds(ctx context.Context) (min uint32, max uint32, err error) {
+	err = s.db.QueryRowContext(ctx,
+		"SELECT COALESCE(MIN(sequence), 0), COALESCE(MAX(sequence), 0) FROM ledgers").
+		Scan(&min, &max)
+	return min, max, err
+}
+
+// FindMissingLedgerSequences returns ledger sequences in [from, to] (inclusive)
+// that have no corresponding row in the ledgers table, ordered ascending and
+// capped at limit results so a single call cannot be asked to return an
+// unbounded amount of work.
+func (s *PostgresStore) FindMissingLedgerSequences(ctx context.Context, from, to uint32, limit int) ([]uint32, error) {
+	if to < from || limit <= 0 {
+		return nil, nil
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT gs.seq
+		FROM generate_series($1::bigint, $2::bigint) AS gs(seq)
+		LEFT JOIN ledgers l ON l.sequence = gs.seq
+		WHERE l.sequence IS NULL
+		ORDER BY gs.seq
+		LIMIT $3`,
+		from, to, limit)
+	if err != nil {
+		return nil, fmt.Errorf("find missing ledger sequences: %w", err)
+	}
+	defer rows.Close()
+
+	var missing []uint32
+	for rows.Next() {
+		var seq uint32
+		if err := rows.Scan(&seq); err != nil {
+			return nil, fmt.Errorf("scan missing sequence: %w", err)
+		}
+		missing = append(missing, seq)
+	}
+	return missing, rows.Err()
+}
+
 // CleanupTestData removes data for a specific ledger sequence (used by tests).
 func (s *PostgresStore) CleanupTestData(ctx context.Context, sequence uint32) {
 	_, _ = s.db.ExecContext(ctx, "DELETE FROM operations WHERE transaction_hash IN (SELECT hash FROM transactions WHERE ledger_sequence = $1)", sequence)
