@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -171,4 +172,96 @@ func TestIngestionState(t *testing.T) {
 
 	// Clean up
 	_, _ = store.db.ExecContext(ctx, "DELETE FROM ingestion_state WHERE key = 'last_ingested_ledger'")
+}
+
+// insertSyntheticLedgers inserts one minimal ledger row per sequence in
+// [from, to] (inclusive), for use as fixtures in gap-detection tests.
+func insertSyntheticLedgers(t *testing.T, store *PostgresStore, from, to uint32) {
+	t.Helper()
+	ctx := context.Background()
+	base := time.Now().UTC().Truncate(time.Microsecond)
+
+	for seq := from; seq <= to; seq++ {
+		ledger := &Ledger{
+			Sequence:        seq,
+			Hash:            fmt.Sprintf("%064x", seq),
+			PrevHash:        fmt.Sprintf("%064x", seq-1),
+			ClosedAt:        base.Add(time.Duration(seq) * time.Second),
+			TotalCoins:      1,
+			FeePool:         1,
+			BaseFee:         100,
+			BaseReserve:     5000000,
+			MaxTxSetSize:    1000,
+			ProtocolVersion: 21,
+		}
+		if err := store.InsertLedger(ctx, ledger); err != nil {
+			t.Fatalf("insertSyntheticLedgers: InsertLedger(%d) failed: %v", seq, err)
+		}
+	}
+}
+
+// TestFindMissingLedgerSequences is a hermetic gap-finding test: it never
+// contacts the Stellar network, only a local Postgres instance. It ingests a
+// contiguous range of synthetic ledgers, deletes a few rows to open a
+// synthetic gap, and asserts that FindMissingLedgerSequences reports exactly
+// those sequences and no others.
+func TestFindMissingLedgerSequences(t *testing.T) {
+	store := getTestDB(t)
+	defer store.Close()
+
+	ctx := context.Background()
+	const from, to = 97000000, 97000019 // isolated test range
+
+	_, _ = store.db.ExecContext(ctx, "DELETE FROM ledgers WHERE sequence >= $1 AND sequence <= $2", from, to)
+	insertSyntheticLedgers(t, store, from, to)
+	defer func() {
+		_, _ = store.db.ExecContext(ctx, "DELETE FROM ledgers WHERE sequence >= $1 AND sequence <= $2", from, to)
+	}()
+
+	// Bounds should reflect the full range before any gap is introduced.
+	min, max, err := store.GetLedgerSequenceBounds(ctx)
+	if err != nil {
+		t.Fatalf("GetLedgerSequenceBounds failed: %v", err)
+	}
+	if max < to || min > from {
+		t.Fatalf("expected bounds to cover [%d,%d], got [%d,%d]", from, to, min, max)
+	}
+
+	missing, err := store.FindMissingLedgerSequences(ctx, from, to, 100)
+	if err != nil {
+		t.Fatalf("FindMissingLedgerSequences failed: %v", err)
+	}
+	if len(missing) != 0 {
+		t.Fatalf("expected no gaps before deletion, got %v", missing)
+	}
+
+	// Punch a synthetic gap: delete a few non-contiguous rows.
+	wantGaps := []uint32{from + 3, from + 4, from + 10}
+	for _, seq := range wantGaps {
+		if _, err := store.db.ExecContext(ctx, "DELETE FROM ledgers WHERE sequence = $1", seq); err != nil {
+			t.Fatalf("failed to delete ledger %d: %v", seq, err)
+		}
+	}
+
+	missing, err = store.FindMissingLedgerSequences(ctx, from, to, 100)
+	if err != nil {
+		t.Fatalf("FindMissingLedgerSequences failed: %v", err)
+	}
+	if len(missing) != len(wantGaps) {
+		t.Fatalf("expected missing=%v, got %v", wantGaps, missing)
+	}
+	for i, seq := range wantGaps {
+		if missing[i] != seq {
+			t.Errorf("missing[%d] = %d, want %d", i, missing[i], seq)
+		}
+	}
+
+	// The limit parameter must cap results even when more gaps are present.
+	limited, err := store.FindMissingLedgerSequences(ctx, from, to, 2)
+	if err != nil {
+		t.Fatalf("FindMissingLedgerSequences with limit failed: %v", err)
+	}
+	if len(limited) != 2 {
+		t.Fatalf("expected limit=2 to cap results at 2, got %d", len(limited))
+	}
 }
