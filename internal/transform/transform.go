@@ -494,6 +494,9 @@ func claimPredicateMap(p xdr.ClaimPredicate) map[string]interface{} {
 // type-prefixed hex string used by Horizon and Stellar RPC
 // (e.g. "00000000d1d73327fc560cbb3f5a9de85e5fdfebb5c4525c47ecc515989c8a7746a94b8a").
 func claimableBalanceIdString(id xdr.ClaimableBalanceId) string {
+	// MarshalHex cannot realistically fail here: the ID was already decoded
+	// from valid XDR, and re-encoding a decoded value is infallible. The
+	// empty-string branch exists only to satisfy the error contract.
 	s, err := xdr.MarshalHex(id)
 	if err != nil {
 		return ""
@@ -526,11 +529,20 @@ func revokeSponsorshipDetails(details map[string]interface{}, o xdr.RevokeSponso
 			details["data_name"] = string(key.Data.DataName)
 		case xdr.LedgerEntryTypeClaimableBalance:
 			details["sponsorship_type"] = "claimable_balance"
+			// Type-prefixed hex (via MarshalHex), the balance ID format
+			// Horizon and Stellar RPC accept; liquidity_pool_id below is
+			// plain hex because pool IDs have no type prefix anywhere else
+			// in the schema (liquidity_pools/trades store bare 64-char hex).
 			details["claimable_balance_id"] = claimableBalanceIdString(key.ClaimableBalance.BalanceId)
 		case xdr.LedgerEntryTypeLiquidityPool:
 			details["sponsorship_type"] = "liquidity_pool"
 			poolId := key.LiquidityPool.LiquidityPoolId
 			details["liquidity_pool_id"] = hex.EncodeToString(poolId[:])
+		default:
+			// All revocable sponsorship targets are covered above; record
+			// anything unexpected instead of dropping it silently.
+			details["sponsorship_type"] = "unknown"
+			details["ledger_key_type"] = key.Type.String()
 		}
 	case xdr.RevokeSponsorshipTypeRevokeSponsorshipSigner:
 		s := o.MustSigner()
