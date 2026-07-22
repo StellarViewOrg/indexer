@@ -39,7 +39,7 @@ make build
 When `METRICS_ADDR` is set, `live` starts an HTTP server alongside ingestion:
 
 - `GET /metrics` -- Prometheus exposition format. Exposes `indexer_ledgers_ingested_total`, `indexer_transactions_ingested_total`, `indexer_operations_ingested_total`, `indexer_rpc_errors_total`, `indexer_db_errors_total`, and the `indexer_ingestion_lag_ledgers` gauge (network tip minus last ingested ledger).
-- `GET /healthz` -- liveness/readiness probe. Returns `200` when the database is reachable, `503` otherwise. Suitable for Docker/k8s health checks.
+- `GET /healthz` -- liveness/readiness probe. Returns `200` when the database is reachable and the ingestion loop has completed a poll cycle within the last 2 minutes, `503` otherwise (with a generic `reason`, never the raw database error). Suitable for Docker/k8s health checks.
 
 ## Commands
 

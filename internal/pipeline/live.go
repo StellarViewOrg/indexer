@@ -6,6 +6,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/miguelnietoa/stellar-explorer/indexer/internal/health"
 	"github.com/miguelnietoa/stellar-explorer/indexer/internal/metrics"
 	"github.com/miguelnietoa/stellar-explorer/indexer/internal/source"
 	"github.com/miguelnietoa/stellar-explorer/indexer/internal/store"
@@ -97,7 +98,12 @@ func (p *LivePipeline) ingestNewLedgers(ctx context.Context) (int, error) {
 		log.Printf("live pipeline: first run, starting from ledger %d", lastIngested+1)
 	}
 
-	metrics.IngestionLagLedgers.Set(float64(latest.Sequence - lastIngested))
+	lag := int64(latest.Sequence) - int64(lastIngested)
+	if lag < 0 {
+		lag = 0
+	}
+	metrics.IngestionLagLedgers.Set(float64(lag))
+	health.Touch()
 
 	if latest.Sequence <= lastIngested {
 		return 0, nil

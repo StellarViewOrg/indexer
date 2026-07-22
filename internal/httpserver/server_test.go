@@ -18,8 +18,11 @@ func (f fakePinger) PingContext(ctx context.Context) error {
 	return f.err
 }
 
-func TestHealthzReturnsOKWhenDBReachable(t *testing.T) {
-	handler := healthzHandler(fakePinger{})
+func notStale(time.Duration) bool { return false }
+func stale(time.Duration) bool    { return true }
+
+func TestHealthzReturnsOKWhenDBReachableAndPipelineAdvancing(t *testing.T) {
+	handler := healthzHandler(fakePinger{}, notStale)
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()
@@ -35,7 +38,7 @@ func TestHealthzReturnsOKWhenDBReachable(t *testing.T) {
 }
 
 func TestHealthzReturnsServiceUnavailableWhenDBDown(t *testing.T) {
-	handler := healthzHandler(fakePinger{err: errors.New("connection refused")})
+	handler := healthzHandler(fakePinger{err: errors.New("dial tcp 10.0.0.5:5432: connection refused")}, notStale)
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()
@@ -45,8 +48,32 @@ func TestHealthzReturnsServiceUnavailableWhenDBDown(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("expected status 503, got %d", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), `"status":"unhealthy"`) {
-		t.Errorf("expected unhealthy status body, got %q", rec.Body.String())
+	body := rec.Body.String()
+	if !strings.Contains(body, `"status":"unhealthy"`) {
+		t.Errorf("expected unhealthy status body, got %q", body)
+	}
+	if strings.Contains(body, "10.0.0.5") || strings.Contains(body, "connection refused") {
+		t.Errorf("expected raw DB error not to be exposed in response body, got %q", body)
+	}
+}
+
+func TestHealthzReturnsServiceUnavailableWhenPipelineStale(t *testing.T) {
+	handler := healthzHandler(fakePinger{}, stale)
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+
+	handler(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected status 503, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"status":"unhealthy"`) {
+		t.Errorf("expected unhealthy status body, got %q", body)
+	}
+	if !strings.Contains(body, "pipeline not advancing") {
+		t.Errorf("expected reason 'pipeline not advancing', got %q", body)
 	}
 }
 
