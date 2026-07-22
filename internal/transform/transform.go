@@ -315,6 +315,50 @@ func extractOperationDetails(op xdr.Operation) map[string]interface{} {
 	case xdr.OperationTypeBeginSponsoringFutureReserves:
 		o := op.Body.MustBeginSponsoringFutureReservesOp()
 		details["sponsored_id"] = o.SponsoredId.Address()
+	case xdr.OperationTypeSetOptions:
+		o := op.Body.MustSetOptionsOp()
+		if o.InflationDest != nil {
+			details["inflation_dest"] = o.InflationDest.Address()
+		}
+		if o.SetFlags != nil {
+			details["set_flags"] = uint32(*o.SetFlags)
+		}
+		if o.ClearFlags != nil {
+			details["clear_flags"] = uint32(*o.ClearFlags)
+		}
+		if o.MasterWeight != nil {
+			details["master_weight"] = uint32(*o.MasterWeight)
+		}
+		if o.LowThreshold != nil {
+			details["low_threshold"] = uint32(*o.LowThreshold)
+		}
+		if o.MedThreshold != nil {
+			details["med_threshold"] = uint32(*o.MedThreshold)
+		}
+		if o.HighThreshold != nil {
+			details["high_threshold"] = uint32(*o.HighThreshold)
+		}
+		if o.HomeDomain != nil {
+			details["home_domain"] = string(*o.HomeDomain)
+		}
+		if o.Signer != nil {
+			details["signer_key"] = o.Signer.Key.Address()
+			details["signer_weight"] = uint32(o.Signer.Weight)
+		}
+	case xdr.OperationTypeAccountMerge:
+		dest := op.Body.MustDestination()
+		details["destination"] = dest.Address()
+	case xdr.OperationTypeBumpSequence:
+		o := op.Body.MustBumpSequenceOp()
+		details["bump_to"] = fmt.Sprintf("%d", o.BumpTo)
+	case xdr.OperationTypeManageData:
+		o := op.Body.MustManageDataOp()
+		details["name"] = string(o.DataName)
+		if o.DataValue != nil {
+			details["value"] = fmt.Sprintf("%x", []byte(*o.DataValue))
+		}
+	case xdr.OperationTypeInflation:
+		// inflation has no parameters; the "type" entry set above is its complete detail.
 	case xdr.OperationTypeEndSponsoringFutureReserves:
 		// end_sponsoring_future_reserves has an empty operation body; the
 		// "type" entry set above is its complete detail.
@@ -425,6 +469,12 @@ func enrichOperation(storeOp *store.Operation, op xdr.Operation, details map[str
 		o := op.Body.MustLiquidityPoolWithdrawOp()
 		amount := fmt.Sprintf("%d", o.Amount)
 		storeOp.Amount = &amount
+	case xdr.OperationTypeAccountMerge:
+		dest := op.Body.MustDestination()
+		base, muxed, muxedID := parseMuxedAccount(dest)
+		storeOp.Destination = &base
+		storeOp.DestinationMuxed = muxed
+		storeOp.DestinationMuxedID = muxedID
 	}
 }
 
