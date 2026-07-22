@@ -32,6 +32,14 @@ make build
 | `REDIS_URL`    | `redis://localhost:63790`                                                             | No       | Redis connection (optional — logs warning if unavailable) |
 | `BATCH_SIZE`   | `100`                                                                                 | No       | Ledgers per batch                                         |
 | `WORKER_COUNT` | `8`                                                                                   | No       | Parallel workers for `backfill` and `s3backfill`          |
+| `METRICS_ADDR` | —                                                                                     | No       | Listen address (e.g. `:9090`) for `/metrics` and `/healthz` during `live` ingestion. Disabled when unset. |
+
+### Observability
+
+When `METRICS_ADDR` is set, `live` starts an HTTP server alongside ingestion:
+
+- `GET /metrics` -- Prometheus exposition format. Exposes `indexer_ledgers_ingested_total`, `indexer_transactions_ingested_total`, `indexer_operations_ingested_total`, `indexer_rpc_errors_total`, `indexer_db_errors_total`, and the `indexer_ingestion_lag_ledgers` gauge (network tip minus last ingested ledger).
+- `GET /healthz` -- liveness/readiness probe. Returns `200` when the database is reachable and the ingestion loop has completed a poll cycle within the last 2 minutes, `503` otherwise (with a generic `reason`, never the raw database error). Suitable for Docker/k8s health checks.
 
 ## Commands
 
